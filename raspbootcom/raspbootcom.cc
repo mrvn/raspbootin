@@ -183,7 +183,9 @@ void send_kernel(int fd, const char *file) {
     }
 
     fprintf(stderr, "### finished sending\n");
-
+    
+    close(file_fd);
+    
     return;
 }
 
