@@ -232,7 +232,9 @@ int main(int argc, char *argv[]) {
     while(!leave) {
 	// Open device
 	if ((fd = open_serial(argv[1])) == -1) {
-	    if (errno == ENOENT || errno == ENODEV) {
+	    // udev takes a while to change ownership
+	    // so sometimes one gets EPERM
+	    if (errno == ENOENT || errno == ENODEV || errno == EACCES) {
 		fprintf(stderr, "\r### Waiting for %s...\r", argv[1]);
 		sleep(1);
 		continue;
