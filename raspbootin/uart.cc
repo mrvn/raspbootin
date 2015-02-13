@@ -28,7 +28,8 @@
 namespace UART {
     enum {
 	// The GPIO registers base address.
-	GPIO_BASE = 0x20200000,
+//	GPIO_BASE = 0x20200000, // RPi
+	GPIO_BASE = 0x3F200000, // RPi2
 
 	// The offsets for reach register.
 
@@ -39,7 +40,8 @@ namespace UART {
 	GPPUDCLK0 = (GPIO_BASE + 0x98),
 
 	// The base address for UART.
-	UART0_BASE = 0x20201000,
+//	UART0_BASE = 0x20201000, // RPi
+	UART0_BASE = 0x3F201000, // RPi2
 
 	// The offsets for reach register for the UART.
 	UART0_DR     = (UART0_BASE + 0x00),
