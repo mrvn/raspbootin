@@ -17,27 +17,73 @@
 */
 
 #include <stdint.h>
+#include <archinfo.h>
 #include <uart.h>
+#include <kprintf.h>
+#include <atag.h>
 
 extern "C" {
     // kernel_main gets called from boot.S. Declaring it extern "C" avoid
     // having to deal with the C++ name mangling.
-    void kernel_main(uint32_t r0, uint32_t r1, uint32_t atags);
+    void kernel_main(uint32_t r0, uint32_t r1, const Header *atags);
 }
 
 
 #define LOADER_ADDR 0x2000000
 
-const char hello[] = "\r\nRaspbootin V1.0\r\n";
+const char hello[] = "\r\nRaspbootin V1.1\r\n";
 const char halting[] = "\r\n*** system halting ***";
 
-typedef void (*entry_fn)(uint32_t r0, uint32_t r1, uint32_t atags);
+typedef void (*entry_fn)(uint32_t r0, uint32_t r1, const Header *atags);
+
+static constexpr ArchInfo arch_infos[ArchInfo::NUM_ARCH_INFOS] = {
+    ArchInfo("Raspberry Pi b", 0x20000000, 16, 1),
+    ArchInfo("Raspberry Pi b+", 0x20000000, 47, 0),
+    ArchInfo("Raspberry Pi b 2", 0x3F000000, 47, 0),
+};
+
+const ArchInfo *arch_info;
+
+const char *find(const char *str, const char *token) {
+    while(*str) {
+	const char *p = str;
+	const char *q = token;
+	// as long as str matches token
+	while(*p && *p == *q) {
+	    // keep comparing
+	    ++p;
+	    ++q;
+	}
+	if (*q == 0) return str; // found token
+	// token not found, try again
+	++str;
+    }
+
+    // end of string, nothing found
+    return NULL;
+}
 
 // kernel main function, it all begins here
-void kernel_main(uint32_t r0, uint32_t r1, uint32_t atags) {
+void kernel_main(uint32_t r0, uint32_t r1, const Header *atags) {
+    // Fixgure out what kind of Raspberry we are booting on
+    // default to basic Raspberry Pi
+    arch_info = &arch_infos[ArchInfo::RPI];
+    const Cmdline *cmdline = atags->find<Cmdline>();
+    if (find(cmdline->cmdline, "bcm2708.disk_led_gpio=47")) {
+	arch_info = &arch_infos[ArchInfo::RPIplus];
+    }
+    if (find(cmdline->cmdline, "bcm2709.disk_led_gpio=47")) {
+	arch_info = &arch_infos[ArchInfo::RPI2];
+    }
+    
     UART::init();
 again:
-    UART::puts(hello);
+    kprintf(hello);
+    kprintf("######################################################################\n");
+    kprintf("R0 = %#010lx, R1 = %#010lx, ATAGs @ %p\n", r0, r1, atags);
+    atags->print_all();
+    kprintf("Detected '%s'\n", arch_info->model);
+    kprintf("######################################################################\n");
 
     // request kernel by sending 3 breaks
     UART::puts("\x03\x03\x03");

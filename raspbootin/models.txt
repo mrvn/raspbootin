@@ -1,0 +1,17 @@
+RPi2:
+######################################################################
+R0 = 0x00000000, R1 = 0x00000c42, ATAGs @ 0x00000100
+[0x00000100] Core: writable = false, pagesize = 0x00000000, rootdev = 0x00000000
+[0x00000114] Mem: start = 0x00000000, size = 0x37000000
+[0x00000124] Cmdline: 'dma.dmachans=0x7f35 bcm2708_fb.fbwidth=656 bcm2708_fb.fbheight=416 bcm2709.boardrev=0xa01041 bcm2709.serial=0xc7499b41 smsc95xx.macaddr=B8:27:EB:49:9B:41 bcm2708_fb.fbswap=1 bcm2709.disk_led_gpio=47 bcm2709.disk_led_active_low=0 sdhci-bcm2708.emmc_clock_freq=250000000 vc_mem.mem_base=0x3dc00000 vc_mem.mem_size=0x3f000000  dwc_otg.lpm_enable=0 console=ttyAMA0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 elevator=deadline rootwait'
+[0x000002EC] NONE
+######################################################################
+
+RPi b+:
+######################################################################
+R0 = 0x00000000, R1 = 0x00000c42, ATAGs @ 0x00000100
+[0x00000100] Core: writable = false, pagesize = 0x00000000, rootdev = 0x00000000
+[0x00000114] Mem: start = 0x00000000, size = 0x18000000
+[0x00000124] Cmdline: 'dma.dmachans=0x7f35 bcm2708_fb.fbwidth=656 bcm2708_fb.fbheight=416 bcm2708.boardrev=0x10 bcm2708.serial=0xca838b3b smsc95xx.macaddr=B8:27:EB:83:8B:3B bcm2708_fb.fbswap=1 bcm2708.disk_led_gpio=47 bcm2708.disk_led_active_low=0 sdhci-bcm2708.emmc_clock_freq=250000000 vc_mem.mem_base=0x1ec00000 vc_mem.mem_size=0x20000000  dwc_otg.lpm_enable=0 console=ttyAMA0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 elevator=deadline rootwait'
+[0x000002E8] NONE
+######################################################################

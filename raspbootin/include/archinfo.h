@@ -1,4 +1,4 @@
-/* mmio.h - access to MMIO registers */
+/* main.cc - the entry point for the kernel */
 /* Copyright (C) 2013 Goswin von Brederlow <goswin-v-b@web.de>
 
    This program is free software; you can redistribute it and/or modify
@@ -16,28 +16,26 @@
    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
-#ifndef MMIO_H
-#define MMIO_H
+#ifndef RASPBOOTIN_ARCHINFO_H
+#define RASPBOOTIN_ARCHINFO_H
 
 #include <stdint.h>
-#include <archinfo.h>
+#include <atag.h>
 
-namespace MMIO {
-    // write to MMIO register
-    static inline void write(uint32_t reg, uint32_t data) {
-	uint32_t *ptr = (uint32_t*)(arch_info->peripherals_base + reg);
-	asm volatile("str %[data], [%[reg]]"
-		     : : [reg]"r"(ptr), [data]"r"(data));
-    }
+class ArchInfo {
+public:
+    enum Archs { RPI, RPIplus, RPI2, NUM_ARCH_INFOS };
+    constexpr ArchInfo(const char *model_, uint32_t peripherals_base_, int disk_led_gpio_,
+	     bool disk_led_active_low_)
+	: model(model_), peripherals_base(peripherals_base_),
+	  disk_led_gpio(disk_led_gpio_),
+	  disk_led_active_low(disk_led_active_low_) { }
+    const char *model;
+    const uint32_t peripherals_base;
+    const int disk_led_gpio;
+    const bool disk_led_active_low;
+};
 
-    // read from MMIO register
-    static inline uint32_t read(uint32_t reg) {
-	uint32_t *ptr = (uint32_t*)(arch_info->peripherals_base + reg);
-	uint32_t data;
-	asm volatile("ldr %[data], [%[reg]]"
-		     : [data]"=r"(data) : [reg]"r"(ptr));
-	return data;
-    }
-}
+extern const ArchInfo *arch_info;
 
-#endif // #ifndef MMIO_H
+#endif // #ifndef RASPBOOTIN_ARCHINFO_H
