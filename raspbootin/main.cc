@@ -114,7 +114,7 @@ again:
 
     // fn() should never return. But it might, so make sure we catch it.
     // Wait a bit
-    for(volatile int i = 0; i < 10000000; ++i) { }
+    for(int i = 0; i < 10000000; ++i) { asm(""); }
 
     // Say goodbye and return to boot.S to halt.
     UART::puts(halting);
