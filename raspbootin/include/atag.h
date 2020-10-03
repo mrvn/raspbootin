@@ -31,12 +31,12 @@ class Static {
 public:
     Static() { }
     ~Static() { }
-    void* operator new (std::size_t /* size */, void* ptr) throw() {
+    void* operator new (std::size_t /* size */, void* ptr) _GLIBCXX_THROW() {
         // placement new is allowed
         return ptr;
     }
 private:
-    void* operator new (std::size_t size) throw (std::bad_alloc) = delete;
+    void* operator new (std::size_t size) _GLIBCXX_THROW (std::bad_alloc) = delete;
     void* operator new (std::size_t size, const std::nothrow_t& nothrow_value) throw() = delete;
 };
 
