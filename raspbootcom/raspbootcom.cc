@@ -34,6 +34,7 @@
 
 struct termios old_tio, new_tio;
 
+void do_exit(int fd, int res) __attribute__ ((noreturn));
 void do_exit(int fd, int res) {
     // close FD
     if (fd != -1) close(fd);
