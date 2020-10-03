@@ -320,7 +320,7 @@ int main(int argc, char *argv[]) {
 		}
 		// output from the RPi, copy to STDOUT
 		if (FD_ISSET(fd, &rfds)) {
-		    char buf2[BUF_SIZE];
+		    char buf2[BUF_SIZE + 1];
 		    ssize_t len = read(fd, buf2, BUF_SIZE);
 		    switch(len) {
 		    case -1:
@@ -329,6 +329,7 @@ int main(int argc, char *argv[]) {
 		    case 0:
 			done = true;
 		    }
+		    buf2[len] = 0;
 		    // scan output for tripple break (^C^C^C)
 		    // send kernel on tripple break, otherwise output text
 		    const char *p = buf2;
