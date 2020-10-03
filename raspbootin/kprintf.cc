@@ -324,8 +324,11 @@ void vcprintf(vcprintf_callback_t callback, void *state, const char* format,
 	case 'p':
 	    flags.alternate = true;
 	    if (precision == -1) precision = 2 * sizeof(void*);
+	    __attribute__ ((fallthrough));
 	case 'X': flags.upper = true;
+	    __attribute__ ((fallthrough));
 	case 'x': base = 16; flags.space = false; flags.zeropad = true;
+	    __attribute__ ((fallthrough));
 	case 'u':
 	    switch(length) {
 	    case 1: num = (uint8_t) va_arg(args, int); break;
