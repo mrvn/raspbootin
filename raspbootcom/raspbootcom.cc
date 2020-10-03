@@ -29,16 +29,26 @@
 #include <endian.h>
 #include <stdint.h>
 #include <termios.h>
+#include <signal.h>
 
 #define BUF_SIZE 65536
 
 struct termios old_tio, new_tio;
 
+void reset_terminal(int sig) {
+    // restore settings for STDIN_FILENO
+    if (isatty(STDIN_FILENO)) {
+        tcsetattr(STDIN_FILENO,TCSANOW,&old_tio);
+    }
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
 void do_exit(int res) __attribute__ ((noreturn));
 void do_exit(int res) {
     // restore settings for STDIN_FILENO
     if (isatty(STDIN_FILENO)) {
-	tcsetattr(STDIN_FILENO,TCSANOW,&old_tio);
+        tcsetattr(STDIN_FILENO,TCSANOW,&old_tio);
     }
     exit(res);
 }
@@ -222,7 +232,11 @@ int main(int argc, char *argv[]) {
 	    perror("tcgetattr");
 	    exit(EXIT_FAILURE);
 	}
-	
+
+	// add signal handlers to restore settings when interrupted
+	signal(SIGINT, reset_terminal);
+	signal(SIGTERM, reset_terminal);
+
 	// we want to keep the old setting to restore them a the end
 	new_tio=old_tio;
 
