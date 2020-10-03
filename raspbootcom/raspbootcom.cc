@@ -34,15 +34,19 @@
 
 struct termios old_tio, new_tio;
 
-void do_exit(int fd, int res) __attribute__ ((noreturn));
-void do_exit(int fd, int res) {
-    // close FD
-    if (fd != -1) close(fd);
+void do_exit(int res) __attribute__ ((noreturn));
+void do_exit(int res) {
     // restore settings for STDIN_FILENO
     if (isatty(STDIN_FILENO)) {
 	tcsetattr(STDIN_FILENO,TCSANOW,&old_tio);
     }
     exit(res);
+}
+template<typename... T> void do_exit(int res, int fd, T... fds) __attribute__ ((noreturn));
+template<typename... T> void do_exit(int res, int fd, T... fds) {
+    // close FD
+    if (fd != -1) close(fd);
+    do_exit(res, fds...);
 }
 
 // open serial connection
@@ -59,14 +63,14 @@ int open_serial(const char *dev) {
     // must be a tty
     if (!isatty(fd)) {
         fprintf(stderr, "%s is not a tty\n", dev);
-	do_exit(fd, EXIT_FAILURE);
+	do_exit(EXIT_FAILURE, fd);
     }
 
     // Get the attributes.
     if(tcgetattr(fd, &termios) == -1)
     {
         perror("Failed to get attributes of device");
-	do_exit(fd, EXIT_FAILURE);
+	do_exit(EXIT_FAILURE, fd);
     }
 
     // So, we poll.
@@ -84,13 +88,13 @@ int open_serial(const char *dev) {
        (cfsetospeed(&termios, B115200) < 0))
     {
         perror("Failed to set baud-rate");
-	do_exit(fd, EXIT_FAILURE);
+	do_exit(EXIT_FAILURE, fd);
     }
 
     // Write the attributes.
     if (tcsetattr(fd, TCSAFLUSH, &termios) == -1) {
 	perror("tcsetattr()");
-	do_exit(fd, EXIT_FAILURE);
+	do_exit(EXIT_FAILURE, fd);
     }
     return fd;
 }
@@ -107,20 +111,20 @@ void send_kernel(int fd, const char *file) {
     // Set fd blocking
     if (fcntl(fd, F_SETFL, 0) == -1) {
 	perror("fcntl()");
-	do_exit(fd, EXIT_FAILURE);
+	do_exit(EXIT_FAILURE, fd);
     }
 
     // Open file
     if ((file_fd = open(file, O_RDONLY)) == -1) {
 	perror(file);
-	do_exit(fd, EXIT_FAILURE);
+	do_exit(EXIT_FAILURE, fd);
     }
 
     // Get kernel size
     off = lseek(file_fd, 0L, SEEK_END);
     if (off > 0x200000) {
 	fprintf(stderr, "kernel too big\n");
-	do_exit(fd, EXIT_FAILURE);
+	do_exit(EXIT_FAILURE, file_fd, fd);
     }
     size = htole32(off);
     lseek(file_fd, 0L, SEEK_SET);
@@ -134,7 +138,7 @@ void send_kernel(int fd, const char *file) {
 	ssize_t len = write(fd, &p[pos], 4 - pos);
 	if (len == -1) {
 	    perror("write()");
-	    do_exit(fd, EXIT_FAILURE);
+	    do_exit(EXIT_FAILURE, file_fd, fd);
 	}
 	pos += len;
     }
@@ -146,13 +150,13 @@ void send_kernel(int fd, const char *file) {
 	ssize_t len = read(fd, &p[pos], 2 - pos);
 	if (len == -1) {
 	    perror("read()");
-	    do_exit(fd, EXIT_FAILURE);
+	    do_exit(EXIT_FAILURE, file_fd, fd);
 	}
 	pos += len;
     }
     if (ok_buf[0] != 'O' || ok_buf[1] != 'K') {
 	fprintf(stderr, "error after sending size\n");
-	do_exit(fd, EXIT_FAILURE);
+	do_exit(EXIT_FAILURE, file_fd, fd);
     }
 
     while(!done) {
@@ -162,7 +166,7 @@ void send_kernel(int fd, const char *file) {
 	switch(len) {
 	case -1:
 	    perror("read()");
-	    do_exit(fd, EXIT_FAILURE);
+	    do_exit(EXIT_FAILURE, file_fd, fd);
 	case 0:
 	    done = true;
 	}
@@ -170,7 +174,7 @@ void send_kernel(int fd, const char *file) {
 	    ssize_t len2 = write(fd, &buf[pos], len);
 	    if (len2 == -1) {
 		perror("write()");
-		do_exit(fd, EXIT_FAILURE);
+		do_exit(EXIT_FAILURE, file_fd, fd);
 	    }
 	    len -= len2;
 	    pos += len2;
@@ -180,7 +184,7 @@ void send_kernel(int fd, const char *file) {
     // Set fd non-blocking
     if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
 	perror("fcntl()");
-	do_exit(fd, EXIT_FAILURE);
+	do_exit(EXIT_FAILURE, file_fd, fd);
     }
 
     fprintf(stderr, "### finished sending\n");
@@ -243,7 +247,7 @@ int main(int argc, char *argv[]) {
 		continue;
 	    }
 	    perror(argv[1]);
-	    do_exit(fd, EXIT_FAILURE);
+	    do_exit(EXIT_FAILURE, fd);
 	}
 	fprintf(stderr, "### Listening on %s     \n", argv[1]);
 
@@ -274,23 +278,23 @@ int main(int argc, char *argv[]) {
 	    // Wait for something to happend
 	    if (select(max_fd, &rfds, &wfds, &efds, NULL) == -1) {
 		perror("select()");
-		do_exit(fd, EXIT_FAILURE);
+		do_exit(EXIT_FAILURE, fd);
 	    } else {
 		// check for errors
 		if (FD_ISSET(STDIN_FILENO, &efds)) {
 		    fprintf(stderr, "error on STDIN\n");
-		    do_exit(fd, EXIT_FAILURE);
+		    do_exit(EXIT_FAILURE, fd);
 		}
 		if (FD_ISSET(fd, &efds)) {
 		    fprintf(stderr, "error on device\n");
-		    do_exit(fd, EXIT_FAILURE);
+		    do_exit(EXIT_FAILURE, fd);
 		}
 		// RPi is ready to recieve more data, send more
 		if (FD_ISSET(fd, &wfds)) {
 		    ssize_t len = write(fd, &buf[start], end - start);
 		    if (len == -1) {
 			perror("write()");
-			do_exit(fd, EXIT_FAILURE);
+			do_exit(EXIT_FAILURE, fd);
 		    }
 		    start += len;
 		    if (start == end) start = end = 0;
@@ -307,7 +311,7 @@ int main(int argc, char *argv[]) {
 		    switch(len) {
 		    case -1:
 			perror("read()");
-			do_exit(fd, EXIT_FAILURE);
+			do_exit(EXIT_FAILURE, fd);
 		    case 0:
 			done = true;
 			leave = true;
@@ -321,7 +325,7 @@ int main(int argc, char *argv[]) {
 		    switch(len) {
 		    case -1:
 			perror("read()");
-			do_exit(fd, EXIT_FAILURE);
+			do_exit(EXIT_FAILURE, fd);
 		    case 0:
 			done = true;
 		    }
@@ -347,7 +351,7 @@ int main(int argc, char *argv[]) {
 				ssize_t len2 = write(STDOUT_FILENO, "\x03\x03\x03", breaks);
 				if (len2 == -1) {
 				    perror("write()");
-				    do_exit(fd, EXIT_FAILURE);
+				    do_exit(EXIT_FAILURE, fd);
 				}
 				breaks -= len2;
 			    }
@@ -355,7 +359,7 @@ int main(int argc, char *argv[]) {
 				ssize_t len2 = write(STDOUT_FILENO, p, q - p);
 				if (len2 == -1) {
 				    perror("write()");
-				    do_exit(fd, EXIT_FAILURE);
+				    do_exit(EXIT_FAILURE, fd);
 				}
 				p += len2;
 			    }
