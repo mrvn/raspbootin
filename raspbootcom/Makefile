@@ -22,7 +22,7 @@ SOURCES  := $(wildcard *.cc)
 OBJS        += $(patsubst %.cc,%.o,$(SOURCES))
 
 # Build flags
-CXXFLAGS    := -O2 -W -Wall -g
+CXXFLAGS    := -O2 -W -Wall -g -std=gnu++17
 
 # build rules
 all: raspbootcom

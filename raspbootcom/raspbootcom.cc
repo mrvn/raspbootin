@@ -26,365 +26,309 @@
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
-#include <endian.h>
 #include <stdint.h>
 #include <termios.h>
 #include <signal.h>
 
-#define BUF_SIZE 65536
+#include "scope.h"
 
-struct termios old_tio, new_tio;
+#include <string>
+#include <system_error>
 
-void reset_terminal(int sig) {
-    // restore settings for STDIN_FILENO
-    if (isatty(STDIN_FILENO)) {
-        tcsetattr(STDIN_FILENO,TCSANOW,&old_tio);
-    }
-    signal(sig, SIG_DFL);
-    raise(sig);
+enum {
+      BUF_SIZE = 65536,
+};
+
+volatile bool keep_running = true;
+
+// handler invoked by SIGINT or SIGTERM
+void stop_running(int) {
+  keep_running = false;
 }
 
-void do_exit(int res) __attribute__ ((noreturn));
-void do_exit(int res) {
-    // restore settings for STDIN_FILENO
-    if (isatty(STDIN_FILENO)) {
-        tcsetattr(STDIN_FILENO,TCSANOW,&old_tio);
+struct UnixError : public std::system_error::system_error {
+  UnixError(const std::string& what_arg)
+    : std::system_error::system_error(errno, std::generic_category(), what_arg) { }
+  UnixError(const std::string& what_arg, int err_)
+    : std::system_error::system_error(err_, std::generic_category(), what_arg) { }
+
+  template<typename CB>
+  static void maybe_raise(const std::string& what_arg, CB on_error) {
+    if (std::uncaught_exceptions() > 0) {
+      // throwing an exception while unwinding would terminate
+      perror(what_arg.c_str());
+      on_error();
+    } else {
+      int err = errno;
+      on_error();
+      throw UnixError(what_arg, err);
     }
-    exit(res);
-}
-template<typename... T> void do_exit(int res, int fd, T... fds) __attribute__ ((noreturn));
-template<typename... T> void do_exit(int res, int fd, T... fds) {
-    // close FD
-    if (fd != -1) close(fd);
-    do_exit(res, fds...);
-}
+  }
 
-// open serial connection
-int open_serial(const char *dev) {
-    // The termios structure, to be configured for serial interface.
-    struct termios termios;
+  static void maybe_raise(const std::string& what_arg) {
+    maybe_raise(what_arg, [](){});
+  }
 
-    // Open the device, read/write, not the controlling tty, and non-blocking I/O
-    int fd = open(dev, O_RDWR | O_NOCTTY | O_NONBLOCK);
-    if (fd == -1) {
-	// failed to open
-	return -1;
+  template<typename CB>
+  static ssize_t check(const std::string& what_arg, ssize_t res, CB on_error) {
+    // fprintf(stderr, "+++ %s\n\r", what_arg.c_str());
+    if (res == -1) {
+      maybe_raise(what_arg, on_error);
     }
-    // must be a tty
-    if (!isatty(fd)) {
-        fprintf(stderr, "%s is not a tty\n", dev);
-	do_exit(EXIT_FAILURE, fd);
-    }
+    return res;
+  }
 
-    // Get the attributes.
-    if(tcgetattr(fd, &termios) == -1)
-    {
-        perror("Failed to get attributes of device");
-	do_exit(EXIT_FAILURE, fd);
-    }
-
-    // So, we poll.
-    termios.c_cc[VTIME] = 0;
-    termios.c_cc[VMIN] = 0;
-
-    // 8N1 mode, no input/output/line processing masks.
-    termios.c_iflag = 0;
-    termios.c_oflag = 0;
-    termios.c_cflag = CS8 | CREAD | CLOCAL;
-    termios.c_lflag = 0;
-
-    // Set the baud rate.
-    if((cfsetispeed(&termios, B115200) < 0) ||
-       (cfsetospeed(&termios, B115200) < 0))
-    {
-        perror("Failed to set baud-rate");
-	do_exit(EXIT_FAILURE, fd);
-    }
-
-    // Write the attributes.
-    if (tcsetattr(fd, TCSAFLUSH, &termios) == -1) {
-	perror("tcsetattr()");
-	do_exit(EXIT_FAILURE, fd);
-    }
-    return fd;
-}
+  static ssize_t check(const std::string& what_arg, ssize_t res) {
+    return check(what_arg, res, [](){});
+  }
+};
 
 // send kernel to rpi
 void send_kernel(int fd, const char *file) {
-    int file_fd;
-    off_t off;
-    uint32_t size;
-    ssize_t pos;
-    char *p;
-    bool done = false;
-    
-    // Set fd blocking
-    if (fcntl(fd, F_SETFL, 0) == -1) {
-	perror("fcntl()");
-	do_exit(EXIT_FAILURE, fd);
-    }
-
-    // Open file
-    if ((file_fd = open(file, O_RDONLY)) == -1) {
-	perror(file);
-	do_exit(EXIT_FAILURE, fd);
-    }
-
-    // Get kernel size
-    off = lseek(file_fd, 0L, SEEK_END);
-    if (off > 0x200000) {
-	fprintf(stderr, "kernel too big\n");
-	do_exit(EXIT_FAILURE, file_fd, fd);
-    }
-    size = htole32(off);
-    lseek(file_fd, 0L, SEEK_SET);
-
-    fprintf(stderr, "### sending kernel %s [%zu byte]\n", file, (size_t)off);
-
-    // send kernel size to RPi
-    p = (char*)&size;
-    pos = 0;
-    while(pos < 4) {
-	ssize_t len = write(fd, &p[pos], 4 - pos);
-	if (len == -1) {
-	    perror("write()");
-	    do_exit(EXIT_FAILURE, file_fd, fd);
-	}
-	pos += len;
-    }
-    // wait for OK
-    char ok_buf[2];
-    p = ok_buf;
-    pos = 0;
-    while(pos < 2) {
-	ssize_t len = read(fd, &p[pos], 2 - pos);
-	if (len == -1) {
-	    perror("read()");
-	    do_exit(EXIT_FAILURE, file_fd, fd);
-	}
-	pos += len;
-    }
-    if (ok_buf[0] != 'O' || ok_buf[1] != 'K') {
-	fprintf(stderr, "error after sending size\n");
-	do_exit(EXIT_FAILURE, file_fd, fd);
-    }
-
-    while(!done) {
-	char buf[BUF_SIZE];
-	ssize_t pos = 0;
-	ssize_t len = read(file_fd, buf, BUF_SIZE);
-	switch(len) {
-	case -1:
-	    perror("read()");
-	    do_exit(EXIT_FAILURE, file_fd, fd);
-	case 0:
-	    done = true;
-	}
-	while(len > 0) {
-	    ssize_t len2 = write(fd, &buf[pos], len);
-	    if (len2 == -1) {
-		perror("write()");
-		do_exit(EXIT_FAILURE, file_fd, fd);
-	    }
-	    len -= len2;
-	    pos += len2;
-	}
-    }
-    
-    // Set fd non-blocking
-    if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
-	perror("fcntl()");
-	do_exit(EXIT_FAILURE, file_fd, fd);
-    }
-
-    fprintf(stderr, "### finished sending\n");
-    
+  // Open file
+  int file_fd = UnixError::check("open kernel",
+                                 open(file, O_RDONLY));
+  SCOPE_EXIT {
     close(file_fd);
-    
+  };
+
+  // Get kernel size
+  ssize_t size = UnixError::check("probe kernel size",
+                                  lseek(file_fd, 0L, SEEK_END));
+  if (size > 0x200000) {
+    throw UnixError("kernel too big", 0);
+  }
+  UnixError::check("rewind kernel",
+                   lseek(file_fd, 0L, SEEK_SET));
+  fprintf(stderr, "\n\r### sending kernel %s [%zd byte]\n\r", file, size);
+
+  // send kernel size to RPi
+  for (int i = 0; keep_running & (i < 4); ++i) {
+    char c = (size >> 8 * i) & 0xFF;
+    UnixError::check("sending kernel size",
+                     write(fd, &c, 1));
+  }
+  // wait for OK
+  char ok_buf[2] = {0};
+  for (int i = 0; keep_running && (i < 2); ++i) {
+    UnixError::check("reading kernel size response",
+                     read(fd, &ok_buf[i], 1));
+    if (ok_buf[i] == 0) --i; // retry
+  }
+  if (ok_buf[0] != 'O' || ok_buf[1] != 'K') {
+    fprintf(stderr, "error after sending size, got '%c%c' [0x%02x 0x%02x]\n\r",
+            ok_buf[0], ok_buf[1], uint8_t(ok_buf[0]), uint8_t(ok_buf[1]));
     return;
+  }
+
+  while(keep_running && (size > 0)) {
+    char buf[BUF_SIZE];
+    ssize_t pos = 0;
+    ssize_t len = UnixError::check("reading kernel",
+                                   read(file_fd, buf, BUF_SIZE));
+    size -= len;
+    while(keep_running && (len > 0)) {
+      ssize_t len2 = UnixError::check("sending kernel",
+                                      write(fd, &buf[pos], len));
+      len -= len2;
+      pos += len2;
+    }
+  }
+
+  fprintf(stderr, "### finished sending\n\r");
 }
 
 int main(int argc, char *argv[]) {
-    int fd, max_fd = STDIN_FILENO;
+  try {
+    int serial_fd, max_fd = STDIN_FILENO;
     fd_set rfds, wfds, efds;
-    char buf[BUF_SIZE];
-    size_t start = 0;
-    size_t end = 0;
-    bool done = false, leave = false;
     int breaks = 0;
+    int exit_code = 0;
 
     printf("Raspbootcom V1.0\n");
 
     if (argc != 3) {
-	printf("USAGE: %s <dev> <file>\n", argv[0]);
-	printf("Example: %s /dev/ttyUSB0 kernel/kernel.img\n", argv[0]);
-	exit(EXIT_FAILURE);
+      printf("USAGE: %s <dev> <file>\n", argv[0]);
+      printf("Example: %s /dev/ttyUSB0 kernel/kernel.img\n", argv[0]);
+      exit(EXIT_FAILURE);
     }
 
-    // Set STDIN non-blocking and unbuffered
-    if (fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK) == -1) {
-	perror("fcntl()");
-	exit(EXIT_FAILURE);
-    }
+    struct termios old_tio, new_tio;
     if (isatty(STDIN_FILENO)) {
-	// get the terminal settings for stdin
-	if (tcgetattr(STDIN_FILENO, &old_tio) == -1) {
-	    perror("tcgetattr");
-	    exit(EXIT_FAILURE);
-	}
-
-	// add signal handlers to restore settings when interrupted
-	signal(SIGINT, reset_terminal);
-	signal(SIGTERM, reset_terminal);
-
-	// we want to keep the old setting to restore them a the end
-	new_tio=old_tio;
-
-	// disable canonical mode (buffered i/o) and local echo
-	new_tio.c_lflag &= (~ICANON & ~ECHO);
-
-	// set the new settings immediately
-	if (tcsetattr(STDIN_FILENO, TCSANOW, &new_tio) == -1) {
-	    perror("tcsetattr()");
-	    do_exit(-1, EXIT_FAILURE);
-	}
+      // get the terminal settings for stdin
+      UnixError::check("get terminal settings",
+                       tcgetattr(STDIN_FILENO, &old_tio));
     }
-    
-    while(!leave) {
-	// Open device
-	if ((fd = open_serial(argv[1])) == -1) {
-	    // udev takes a while to change ownership
-	    // so sometimes one gets EPERM
-	    if (errno == ENOENT || errno == ENODEV || errno == EACCES) {
-		fprintf(stderr, "\r### Waiting for %s...\r", argv[1]);
-		sleep(1);
-		continue;
-	    }
-	    perror(argv[1]);
-	    do_exit(EXIT_FAILURE, fd);
-	}
-	fprintf(stderr, "### Listening on %s     \n", argv[1]);
+    SCOPE_EXIT {
+      if (isatty(STDIN_FILENO)) {
+        // undo settings at exit
+        UnixError::check("restoring terminal settings",
+                         tcsetattr(STDIN_FILENO, TCSANOW, &old_tio));
+      }
+    };
+    if (isatty(STDIN_FILENO)) {
+      new_tio = old_tio;
+      // disable canonical mode (buffered i/o) and local echo
+      new_tio.c_lflag &= (~ICANON & ~ECHO);
 
-	// select needs the largeds FD + 1
-	if (fd > STDIN_FILENO) {
-	    max_fd = fd + 1;
-	} else {
-	    max_fd = STDIN_FILENO + 1;
-	}
-
-	done = false;
-	start = end = 0;
-	while(!done || start != end) {	
-	    // Watch stdin and dev for input.
-	    FD_ZERO(&rfds);
-	    if (!done && end < BUF_SIZE) FD_SET(STDIN_FILENO, &rfds);
-	    FD_SET(fd, &rfds);
-	    
-	    // Watch fd for output if needed.
-	    FD_ZERO(&wfds);
-	    if (start != end) FD_SET(fd, &wfds);
-
-	    // Watch stdin and dev for error.
-	    FD_ZERO(&efds);
-	    FD_SET(STDIN_FILENO, &efds);
-	    FD_SET(fd, &efds);
-
-	    // Wait for something to happend
-	    if (select(max_fd, &rfds, &wfds, &efds, NULL) == -1) {
-		perror("select()");
-		do_exit(EXIT_FAILURE, fd);
-	    } else {
-		// check for errors
-		if (FD_ISSET(STDIN_FILENO, &efds)) {
-		    fprintf(stderr, "error on STDIN\n");
-		    do_exit(EXIT_FAILURE, fd);
-		}
-		if (FD_ISSET(fd, &efds)) {
-		    fprintf(stderr, "error on device\n");
-		    do_exit(EXIT_FAILURE, fd);
-		}
-		// RPi is ready to recieve more data, send more
-		if (FD_ISSET(fd, &wfds)) {
-		    ssize_t len = write(fd, &buf[start], end - start);
-		    if (len == -1) {
-			perror("write()");
-			do_exit(EXIT_FAILURE, fd);
-		    }
-		    start += len;
-		    if (start == end) start = end = 0;
-		    // shift buffer contents
-		    if (end == BUF_SIZE) {
-			memmove(buf, &buf[start], end - start);
-			end -= start;
-			start = 0;
-		    }
-		}
-		// input from the user, copy to RPi
-		if (FD_ISSET(STDIN_FILENO, &rfds)) {
-		    ssize_t len = read(STDIN_FILENO, &buf[end], BUF_SIZE - end);
-		    switch(len) {
-		    case -1:
-			perror("read()");
-			do_exit(EXIT_FAILURE, fd);
-		    case 0:
-			done = true;
-			leave = true;
-		    }
-		    end += len;
-		}
-		// output from the RPi, copy to STDOUT
-		if (FD_ISSET(fd, &rfds)) {
-		    char buf2[BUF_SIZE + 1];
-		    ssize_t len = read(fd, buf2, BUF_SIZE);
-		    switch(len) {
-		    case -1:
-			perror("read()");
-			do_exit(EXIT_FAILURE, fd);
-		    case 0:
-			done = true;
-		    }
-		    buf2[len] = 0;
-		    // scan output for tripple break (^C^C^C)
-		    // send kernel on tripple break, otherwise output text
-		    const char *p = buf2;
-		    while(p < &buf2[len]) {
-			const char *q = index(p, '\x03');
-			if (q == NULL) q = &buf2[len];
-			if (p == q) {
-			    ++breaks;
-			    ++p;
-			    if (breaks == 3) {
-				if (start != end) {
-				    fprintf(stderr, "Discarding input after tripple break\n");
-				    start = end = 0;
-				}
-				send_kernel(fd, argv[2]);
-				breaks = 0;
-			    }
-			} else {
-			    while (breaks > 0) {
-				ssize_t len2 = write(STDOUT_FILENO, "\x03\x03\x03", breaks);
-				if (len2 == -1) {
-				    perror("write()");
-				    do_exit(EXIT_FAILURE, fd);
-				}
-				breaks -= len2;
-			    }
-			    while(p < q) {
-				ssize_t len2 = write(STDOUT_FILENO, p, q - p);
-				if (len2 == -1) {
-				    perror("write()");
-				    do_exit(EXIT_FAILURE, fd);
-				}
-				p += len2;
-			    }
-			}
-		    }
-		}
-	    }
-	}
-	close(fd);
+      // set the new settings immediately
+      UnixError::check("set terminal settings",
+                       tcsetattr(STDIN_FILENO, TCSANOW, &new_tio));
     }
-		
-    do_exit(-1, EXIT_SUCCESS);
+
+    // add signal handlers to stop running when interrupted
+    signal(SIGINT, stop_running);
+    signal(SIGTERM, stop_running);
+
+    while(keep_running) {
+      // Open serial device
+      if ((serial_fd = open(argv[1], O_RDWR | O_NOCTTY | O_NONBLOCK)) == -1) {
+        // udev takes a while to change ownership
+        // so sometimes one gets EACCESS
+        if (errno == ENOENT || errno == ENODEV || errno == EACCES) {
+          fprintf(stderr, "\r### Waiting for %s...\r", argv[1]);
+          sleep(1);
+          continue;
+        } else
+          throw UnixError("open serial");
+      }
+      SCOPE_EXIT {
+        close(serial_fd);
+      };
+
+      // The termios structure, to be configured for serial interface.
+      struct termios termios;
+
+      // must be a tty
+      if (!isatty(serial_fd)) {
+        fprintf(stderr, "%s is not a tty\n\r", argv[1]);
+        keep_running = false;
+        break;
+      }
+
+      // Get the attributes.
+      UnixError::check("get attributes",
+                       tcgetattr(serial_fd, &termios));
+
+      // So, we poll.
+      termios.c_cc[VTIME] = 0;
+      termios.c_cc[VMIN] = 0;
+
+      // 8N1 mode, no input/output/line processing masks.
+      termios.c_iflag = 0;
+      termios.c_oflag = 0;
+      termios.c_cflag = CS8 | CREAD | CLOCAL;
+      termios.c_lflag = 0;
+
+      // Set the baud rate.
+      UnixError::check("set BAUD rate (in)",
+                       cfsetispeed(&termios, B115200));
+      UnixError::check("set BAUD rate (out)",
+                       cfsetospeed(&termios, B115200));
+
+      // Write the attributes.
+      UnixError::check("set attributes",
+                       tcsetattr(serial_fd, TCSAFLUSH, &termios));
+
+      // Ready to listen
+      fprintf(stderr, "### Listening on %s     \n\r", argv[1]);
+
+      // select needs the largeds FD + 1
+      if (serial_fd > STDIN_FILENO) {
+        max_fd = serial_fd + 1;
+      } else {
+        max_fd = STDIN_FILENO + 1;
+      }
+
+      while(keep_running) {
+        // Watch stdin and serial for input.
+        FD_ZERO(&rfds);
+        FD_SET(STDIN_FILENO, &rfds);
+        FD_SET(serial_fd, &rfds);
+
+        // Watch stdin and dev for error.
+        FD_ZERO(&efds);
+        FD_SET(STDIN_FILENO, &efds);
+        FD_SET(serial_fd, &efds);
+
+        // Wait for something to happend
+        ssize_t num_fds = UnixError::check("select",
+                                           select(max_fd, &rfds, &wfds, &efds,
+                                                  NULL));
+        (void)num_fds;
+        //fprintf(stderr, "==> %zd\n\r", num_fds);
+        // check for errors
+        if (FD_ISSET(STDIN_FILENO, &efds)) {
+          fprintf(stderr, "error on STDIN\n");
+          keep_running = false;
+          exit_code = 1;
+          break;
+        }
+        if (FD_ISSET(serial_fd, &efds)) {
+          fprintf(stderr, "error on device\n");
+          keep_running = false;
+          exit_code = 1;
+          break;
+        }
+        // input from the user, copy to RPi
+        if (FD_ISSET(STDIN_FILENO, &rfds)) {
+          char c;
+          ssize_t len = UnixError::check("read from stdin",
+                                         read(STDIN_FILENO, &c, 1));
+          if (len == 0) {
+            keep_running = false;
+            break;
+          }
+          //fprintf(stderr, "stdin: '%c' [%02x]\n\r", c, uint8_t(c));
+          len = UnixError::check("write to serial",
+                                 write(serial_fd, &c, 1));
+          if (len == 0) {
+            break;
+          }
+        }
+        // output from the RPi, copy to STDOUT
+        if (FD_ISSET(serial_fd, &rfds)) {
+          char c;
+          ssize_t len = UnixError::check("read from serial",
+                                         read(serial_fd, &c, 1));
+          if (len == 0) {
+            break;
+          }
+          //fprintf(stderr, "serial: '%c' [%02x]\n\r", c, uint8_t(c));
+          // scan output for tripple break (^C^C^C)
+          // send kernel on tripple break, otherwise output text
+          if (c == '\x03') {
+            ++breaks;
+            if (breaks == 3) {
+              send_kernel(serial_fd, argv[2]);
+              breaks = 0;
+            }
+          } else {
+            while (breaks > 0) {
+              ssize_t len = UnixError::check("write to stdout",
+                                             write(STDOUT_FILENO,
+                                                   "\x03\x03\x03",
+                                                   breaks));
+              if (len == 0) {
+                keep_running = false;
+                break;
+              }
+              breaks -= len;
+            }
+            if (keep_running) {
+              ssize_t len = UnixError::check("write to stdout",
+                                             write(STDOUT_FILENO, &c, 1));
+              if (len == 0) {
+                keep_running = false;
+                break;
+              }
+            }
+          }
+        }
+      }
+    } 
+    return exit_code;
+  } catch(std::exception&) {
+    throw;
+  }
 }
