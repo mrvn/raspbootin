@@ -16,7 +16,7 @@
    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
-#define _BSD_SOURCE             /* See feature_test_macros(7) */
+#define _DEFAULT_SOURCE             /* See feature_test_macros(7) */
 
 #include <stdio.h>
 #include <stdlib.h>
